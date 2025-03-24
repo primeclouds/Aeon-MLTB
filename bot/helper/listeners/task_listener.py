@@ -1,3 +1,4 @@
+# ruff: noqa: RUF006
 from asyncio import create_task, gather, sleep
 from html import escape
 
@@ -46,8 +47,9 @@ from bot.helper.mirror_leech_utils.status_utils.telegram_status import TelegramS
 from bot.helper.mirror_leech_utils.telegram_uploader import TelegramUploader
 from bot.helper.telegram_helper.button_build import ButtonMaker
 from bot.helper.telegram_helper.message_utils import (
+    auto_delete_message,
+    delete_message,
     delete_status,
-    five_minute_del,
     send_message,
     update_status_message,
 )
@@ -64,8 +66,8 @@ class TaskListener(TaskConfig):
                     intvl.cancel()
             intervals["status"].clear()
             await gather(TorrentManager.aria2.purgeDownloadResult(), delete_status())
-        except Exception:
-            pass
+        except Exception as e:
+            LOGGER.error(e)
 
     def clear(self):
         self.subname = ""
@@ -132,7 +134,7 @@ class TaskListener(TaskConfig):
                                     f"Moving files from {self.mid} to {des_id}",
                                 )
                                 for item in await listdir(spath):
-                                    if item.endswith(".aria2"):
+                                    if item.strip().endswith((".aria2", ".!qB")):
                                         continue
                                     item_path = (
                                         f"{self.dir}{self.folder_name}/{item}"
@@ -169,7 +171,7 @@ class TaskListener(TaskConfig):
             return
 
         if self.folder_name:
-            self.name = self.folder_name.strip("/")
+            self.name = self.folder_name.strip("/").split("/", 1)[0]
 
         if not await aiopath.exists(f"{self.dir}/{self.name}"):
             try:
@@ -185,11 +187,12 @@ class TaskListener(TaskConfig):
         self.size = await get_path_size(dl_path)
         self.is_file = await aiopath.isfile(dl_path)
         if self.seed:
-            self.up_dir = f"{self.dir}10000"
+            up_dir = self.up_dir = f"{self.dir}10000"
             up_path = f"{self.up_dir}/{self.name}"
             await create_recursive_symlink(self.dir, self.up_dir)
             LOGGER.info(f"Shortcut created: {dl_path} -> {up_path}")
         else:
+            up_dir = self.dir
             up_path = dl_path
         await remove_excluded_files(
             self.up_dir or self.dir,
@@ -204,12 +207,12 @@ class TaskListener(TaskConfig):
         if self.join and not self.is_file:
             await join_files(up_path)
 
-        if self.extract:
+        if self.extract and not self.is_nzb:
             up_path = await self.proceed_extract(up_path, gid)
             if self.is_cancelled:
                 return
             self.is_file = await aiopath.isfile(up_path)
-            up_dir, self.name = up_path.rsplit("/", 1)
+            self.name = up_path.replace(f"{up_dir}/", "").split("/", 1)[0]
             self.size = await get_path_size(up_dir)
             self.clear()
             await remove_excluded_files(up_dir, self.excluded_extensions)
@@ -222,7 +225,7 @@ class TaskListener(TaskConfig):
             if self.is_cancelled:
                 return
             self.is_file = await aiopath.isfile(up_path)
-            up_dir, self.name = up_path.rsplit("/", 1)
+            self.name = up_path.replace(f"{up_dir}/", "").split("/", 1)[0]
             self.size = await get_path_size(up_dir)
             self.clear()
 
@@ -234,7 +237,7 @@ class TaskListener(TaskConfig):
             if self.is_cancelled:
                 return
             self.is_file = await aiopath.isfile(up_path)
-            up_dir, self.name = up_path.rsplit("/", 1)
+            self.name = up_path.replace(f"{up_dir}/", "").split("/", 1)[0]
             self.size = await get_path_size(up_dir)
             self.clear()
 
@@ -246,7 +249,7 @@ class TaskListener(TaskConfig):
             if self.is_cancelled:
                 return
             self.is_file = await aiopath.isfile(up_path)
-            up_dir, self.name = up_path.rsplit("/", 1)
+            self.name = up_path.replace(f"{up_dir}/", "").split("/", 1)[0]
             self.size = await get_path_size(up_dir)
             self.clear()
 
@@ -255,14 +258,18 @@ class TaskListener(TaskConfig):
             if self.is_cancelled:
                 return
             self.is_file = await aiopath.isfile(up_path)
-            self.name = up_path.rsplit("/", 1)[1]
+            self.name = up_path.replace(f"{up_dir}/", "").split("/", 1)[0]
+
+        up_path = await self.remove_www_prefix(up_path)
+        self.is_file = await aiopath.isfile(up_path)
+        self.name = up_path.replace(f"{up_dir}/", "").split("/", 1)[0]
 
         if self.screen_shots:
             up_path = await self.generate_screenshots(up_path)
             if self.is_cancelled:
                 return
             self.is_file = await aiopath.isfile(up_path)
-            up_dir, self.name = up_path.rsplit("/", 1)
+            self.name = up_path.replace(f"{up_dir}/", "").split("/", 1)[0]
             self.size = await get_path_size(up_dir)
 
         if self.convert_audio or self.convert_video:
@@ -273,7 +280,7 @@ class TaskListener(TaskConfig):
             if self.is_cancelled:
                 return
             self.is_file = await aiopath.isfile(up_path)
-            up_dir, self.name = up_path.rsplit("/", 1)
+            self.name = up_path.replace(f"{up_dir}/", "").split("/", 1)[0]
             self.size = await get_path_size(up_dir)
             self.clear()
 
@@ -285,7 +292,7 @@ class TaskListener(TaskConfig):
             if self.is_cancelled:
                 return
             self.is_file = await aiopath.isfile(up_path)
-            up_dir, self.name = up_path.rsplit("/", 1)
+            self.name = up_path.replace(f"{up_dir}/", "").split("/", 1)[0]
             self.size = await get_path_size(up_dir)
             self.clear()
 
@@ -299,7 +306,7 @@ class TaskListener(TaskConfig):
                 return
             self.clear()
 
-        up_dir, self.name = up_path.rsplit("/", 1)
+        self.name = up_path.replace(f"{up_dir}/", "").split("/", 1)[0]
         self.size = await get_path_size(up_dir)
 
         if self.is_leech and not self.compress:
@@ -335,6 +342,7 @@ class TaskListener(TaskConfig):
                 update_status_message(self.message.chat.id),
                 tg.upload(),
             )
+            await delete_message(tg.log_msg)
             del tg
         elif is_gdrive_id(self.up_dest):
             LOGGER.info(f"Gdrive Upload Name: {self.name}")
@@ -394,7 +402,7 @@ class TaskListener(TaskConfig):
                         )
                         if Config.LOG_CHAT_ID:
                             await send_message(
-                                Config.LOG_CHAT_ID,
+                                int(Config.LOG_CHAT_ID),
                                 f"{msg}<blockquote expandable>{fmsg}</blockquote>",
                             )
                         await sleep(1)
@@ -406,7 +414,7 @@ class TaskListener(TaskConfig):
                     )
                     if Config.LOG_CHAT_ID:
                         await send_message(
-                            Config.LOG_CHAT_ID,
+                            int(Config.LOG_CHAT_ID),
                             f"{msg}<blockquote expandable>{fmsg}</blockquote>",
                         )
                 await send_message(self.message, done_msg)
@@ -449,7 +457,7 @@ class TaskListener(TaskConfig):
             msg += f"\n\n<b>cc: </b>{self.tag}"
             await send_message(self.user_id, msg, button)
             if Config.LOG_CHAT_ID:
-                await send_message(Config.LOG_CHAT_ID, msg, button)
+                await send_message(int(Config.LOG_CHAT_ID), msg, button)
             await send_message(self.message, done_msg)
         if self.seed:
             await clean_target(self.up_dir)
@@ -482,7 +490,7 @@ class TaskListener(TaskConfig):
         await self.remove_from_same_dir()
         msg = f"{self.tag} Download: {escape(str(error))}"
         x = await send_message(self.message, msg, button)
-        create_task(five_minute_del(x))  # noqa: RUF006
+        create_task(auto_delete_message(x, time=300))
         if count == 0:
             await self.clean()
         else:
@@ -521,7 +529,7 @@ class TaskListener(TaskConfig):
                 del task_dict[self.mid]
             count = len(task_dict)
         x = await send_message(self.message, f"{self.tag} {escape(str(error))}")
-        create_task(five_minute_del(x))  # noqa: RUF006
+        create_task(auto_delete_message(x, time=300))
         if count == 0:
             await self.clean()
         else:

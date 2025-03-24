@@ -8,9 +8,10 @@ cfg.zip
 accounts/*
 MediaInfo/*
 Images/*
-Thumbnails/*
+thumbnails/*
 rclone/*
 tokens/*
+sabnzbd/*
 list_drives.txt
 shorteners.txt
 cookies.txt

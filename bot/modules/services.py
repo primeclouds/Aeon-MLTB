@@ -14,9 +14,9 @@ from bot.helper.telegram_helper.bot_commands import BotCommands
 from bot.helper.telegram_helper.button_build import ButtonMaker
 from bot.helper.telegram_helper.filters import CustomFilters
 from bot.helper.telegram_helper.message_utils import (
+    auto_delete_message,
     delete_message,
     edit_message,
-    five_minute_del,
     send_file,
     send_message,
 )
@@ -72,9 +72,9 @@ async def start(client, message):
 
 @new_task
 async def ping(_, message):
-    start_time = int(round(time() * 1000))
+    start_time = round(time() * 1000)
     reply = await send_message(message, "Starting Ping")
-    end_time = int(round(time() * 1000))
+    end_time = round(time() * 1000)
     await edit_message(reply, f"{end_time - start_time} ms")
 
 
@@ -88,7 +88,7 @@ async def log(_, message):
         buttons=buttons.build_menu(1),
     )
     await delete_message(message)
-    await five_minute_del(reply_message)
+    await auto_delete_message(reply_message, time=300)
 
 
 @new_task
@@ -127,7 +127,7 @@ async def aeon_callback(_, query):
             )
             await query.edit_message_reply_markup(None)
             await delete_message(message)
-            await five_minute_del(reply_message)
+            await auto_delete_message(reply_message, time=300)
         except Exception as err:
             LOGGER.error(f"TG Log Display : {err!s}")
     elif data[2] == "private":

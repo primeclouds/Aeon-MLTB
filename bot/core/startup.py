@@ -14,8 +14,10 @@ from bot import (
     drives_names,
     excluded_extensions,
     index_urls,
+    nzb_options,
     qbit_options,
     rss_dict,
+    sabnzbd_client,
     shorteners_list,
     sudo_users,
     user_data,
@@ -51,39 +53,67 @@ async def update_aria2_options():
         await TorrentManager.aria2.changeGlobalOption(aria2_options)
 
 
+async def update_nzb_options():
+    no = (await sabnzbd_client.get_config())["config"]["misc"]
+    nzb_options.update(no)
+
+
 async def load_settings():
-    if await aiopath.exists("Thumbnails"):
-        await rmtree("Thumbnails", ignore_errors=True)
     if not Config.DATABASE_URL:
         return
+    for p in ["thumbnails", "tokens", "rclone"]:
+        if await aiopath.exists(p):
+            await rmtree(p, ignore_errors=True)
     await database.connect()
     if database.db is not None:
         BOT_ID = Config.BOT_TOKEN.split(":", 1)[0]
-        config_file = Config.get_all()
-        old_config = await database.db.settings.deployConfig.find_one(
+        current_deploy_config = Config.get_all()
+        old_deploy_config = await database.db.settings.deployConfig.find_one(
             {"_id": BOT_ID},
             {"_id": 0},
         )
-        if old_config is None:
+
+        if old_deploy_config is None:
             await database.db.settings.deployConfig.replace_one(
                 {"_id": BOT_ID},
-                config_file,
+                current_deploy_config,
                 upsert=True,
             )
-        if old_config and old_config != config_file:
-            LOGGER.info("Replacing existing config file in Database")
+        elif old_deploy_config != current_deploy_config:
+            runtime_config = (
+                await database.db.settings.config.find_one(
+                    {"_id": BOT_ID},
+                    {"_id": 0},
+                )
+                or {}
+            )
+
+            new_vars = {
+                k: v
+                for k, v in current_deploy_config.items()
+                if k not in runtime_config
+            }
+            if new_vars:
+                runtime_config.update(new_vars)
+                await database.db.settings.config.replace_one(
+                    {"_id": BOT_ID},
+                    runtime_config,
+                    upsert=True,
+                )
+                LOGGER.info(f"Added new variables: {list(new_vars.keys())}")
+
             await database.db.settings.deployConfig.replace_one(
                 {"_id": BOT_ID},
-                config_file,
+                current_deploy_config,
                 upsert=True,
             )
-        else:
-            config_dict = await database.db.settings.config.find_one(
-                {"_id": BOT_ID},
-                {"_id": 0},
-            )
-            if config_dict:
-                Config.load_dict(config_dict)
+
+        runtime_config = await database.db.settings.config.find_one(
+            {"_id": BOT_ID},
+            {"_id": 0},
+        )
+        if runtime_config:
+            Config.load_dict(runtime_config)
 
         if pf_dict := await database.db.settings.files.find_one(
             {"_id": BOT_ID},
@@ -107,29 +137,37 @@ async def load_settings():
         ):
             qbit_options.update(qbit_opt)
 
+        if nzb_opt := await database.db.settings.nzb.find_one(
+            {"_id": BOT_ID},
+            {"_id": 0},
+        ):
+            if await aiopath.exists("sabnzbd/SABnzbd.ini.bak"):
+                await remove("sabnzbd/SABnzbd.ini.bak")
+            ((key, value),) = nzb_opt.items()
+            file_ = key.replace("__", ".")
+            async with aiopen(f"sabnzbd/{file_}", "wb+") as f:
+                await f.write(value)
+
         if await database.db.users.find_one():
+            for p in ["thumbnails", "tokens", "rclone"]:
+                if not await aiopath.exists(p):
+                    await makedirs(p)
             rows = database.db.users.find({})
             async for row in rows:
                 uid = row["_id"]
                 del row["_id"]
-                thumb_path = f"Thumbnails/{uid}.jpg"
+                thumb_path = f"thumbnails/{uid}.jpg"
                 rclone_config_path = f"rclone/{uid}.conf"
                 token_path = f"tokens/{uid}.pickle"
                 if row.get("THUMBNAIL"):
-                    if not await aiopath.exists("Thumbnails"):
-                        await makedirs("Thumbnails")
                     async with aiopen(thumb_path, "wb+") as f:
                         await f.write(row["THUMBNAIL"])
                     row["THUMBNAIL"] = thumb_path
                 if row.get("RCLONE_CONFIG"):
-                    if not await aiopath.exists("rclone"):
-                        await makedirs("rclone")
                     async with aiopen(rclone_config_path, "wb+") as f:
                         await f.write(row["RCLONE_CONFIG"])
                     row["RCLONE_CONFIG"] = rclone_config_path
                 if row.get("TOKEN_PICKLE"):
-                    if not await aiopath.exists("tokens"):
-                        await makedirs("tokens")
                     async with aiopen(token_path, "wb+") as f:
                         await f.write(row["TOKEN_PICKLE"])
                     row["TOKEN_PICKLE"] = token_path
@@ -162,6 +200,14 @@ async def save_settings():
         )
     if await database.db.settings.qbittorrent.find_one({"_id": TgClient.ID}) is None:
         await database.save_qbit_settings()
+    if await database.db.settings.nzb.find_one({"_id": TgClient.ID}) is None:
+        async with aiopen("sabnzbd/SABnzbd.ini", "rb+") as pf:
+            nzb_conf = await pf.read()
+        await database.db.settings.nzb.update_one(
+            {"_id": TgClient.ID},
+            {"$set": {"SABnzbd__ini": nzb_conf}},
+            upsert=True,
+        )
 
 
 async def update_variables():
