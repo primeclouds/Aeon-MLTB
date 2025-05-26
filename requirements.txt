@@ -31,4 +31,5 @@ tenacity
 uvicorn
 uvloop
 xattr
+pymongo
 yt-dlp[default,curl-cffi]
